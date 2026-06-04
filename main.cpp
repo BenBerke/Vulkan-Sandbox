@@ -7,6 +7,8 @@
 #include <iostream>
 #include <stdexcept>
 #include <cstdlib>
+#include <map>
+#include <vector>
 
 constexpr uint32_t WIDTH = 800;
 constexpr uint32_t HEIGHT = 600;
@@ -35,6 +37,54 @@ private:
     vk::raii::Instance instance = nullptr;
 
     vk::raii::DebugUtilsMessengerEXT debugMessenger = nullptr;
+
+    vk::raii::PhysicalDevice physicalDevice = nullptr;
+
+    void pickPhysicalDevice() {
+        auto physicalDevices = instance.enumeratePhysicalDevices();
+        if (physicalDevices.empty()) throw std::runtime_error("Failed to fund GPUs with Vulkan support");
+
+        std::multimap<int, vk::raii::PhysicalDevice> candidates;
+        for (auto& pd : physicalDevices) {
+            auto deviceProperties = pd.getProperties();
+            auto deviceFeatures = pd.getFeatures();
+
+            if (!deviceFeatures.geometryShader) continue;
+            if (deviceProperties.apiVersion < vk::ApiVersion13) continue;
+
+            auto queueFamilies = pd.getQueueFamilyProperties();
+            bool supportsGraphics =
+                std::ranges::any_of(queueFamilies, [](auto const &qfp) { return !!(qfp.queueFlags & vk::QueueFlagBits::eGraphics); });
+
+            std::vector<const char*> requiredDeviceExtension = {vk::KHRSwapchainExtensionName};
+
+            auto availableDeviceExtensions = pd.enumerateDeviceExtensionProperties();
+            bool supportsAllRequiredExtensions =
+            std::ranges::all_of( requiredDeviceExtension,
+                       [&availableDeviceExtensions]( auto const & requiredDeviceExtension )
+                       {
+                           return std::ranges::any_of( availableDeviceExtensions,
+                                                       [requiredDeviceExtension]( auto const & availableDeviceExtension )
+                                                       { return strcmp( availableDeviceExtension.extensionName, requiredDeviceExtension ) == 0; } );
+                       } );
+
+            auto features                 = pd.template getFeatures2<vk::PhysicalDeviceFeatures2, vk::PhysicalDeviceVulkan13Features, vk::PhysicalDeviceExtendedDynamicStateFeaturesEXT>();
+            bool supportsRequiredFeatures = features.template get<vk::PhysicalDeviceVulkan13Features>().dynamicRendering &&
+                                            features.template get<vk::PhysicalDeviceExtendedDynamicStateFeaturesEXT>().extendedDynamicState;
+
+            if (!supportsAllRequiredExtensions || !supportsRequiredFeatures || !supportsGraphics) continue;
+
+            uint32_t score = 0;
+
+            if (deviceProperties.deviceType == vk::PhysicalDeviceType::eDiscreteGpu) score += 100;
+            score += deviceProperties.limits.maxImageDimension2D;
+            candidates.insert(std::make_pair(score, std::move(pd)));
+        }
+
+        // rbegin() points to the highest score automatically
+        if (!candidates.empty() && candidates.rbegin()->first > 0) physicalDevice = physicalDevice = std::move(std::prev(candidates.end())->second);
+        else throw std::runtime_error("Failed to find a stitable GPU");
+    }
 
     std::vector<const char*> getRequiredInstanceExtensions() {
         uint32_t glfwExtensionCount = 0;
@@ -103,7 +153,16 @@ private:
         if (unsupportedPropertyIt != requiredExtensions.end()) throw std::runtime_error("Required extension not supported: " + std::string(*unsupportedPropertyIt));
 
 
-        vk::InstanceCreateInfo createInfo{
+        vk::DebugUtilsMessageSeverityFlagsEXT severityFlags(vk::DebugUtilsMessageSeverityFlagBitsEXT::eWarning |
+                                                       vk::DebugUtilsMessageSeverityFlagBitsEXT::eError);
+        vk::DebugUtilsMessageTypeFlagsEXT     messageTypeFlags(
+                vk::DebugUtilsMessageTypeFlagBitsEXT::eGeneral | vk::DebugUtilsMessageTypeFlagBitsEXT::ePerformance | vk::DebugUtilsMessageTypeFlagBitsEXT::eValidation);
+        vk::DebugUtilsMessengerCreateInfoEXT debugUtilsMessengerCreateInfoEXT{.messageSeverity = severityFlags,
+                                                                              .messageType     = messageTypeFlags,
+                                                                              .pfnUserCallback = &debugCallback};
+
+        const vk::InstanceCreateInfo createInfo{
+            .pNext = enableValidationLayers ? &debugUtilsMessengerCreateInfoEXT : nullptr,
             .pApplicationInfo = &appInfo,
             .enabledLayerCount = static_cast<uint32_t>(requiredLayers.size()),
             .ppEnabledLayerNames = requiredLayers.data(),
@@ -115,7 +174,7 @@ private:
     }
 
     void setupDebugMessenger() {
-        if (!enableValidationLayers) return;
+        if constexpr (!enableValidationLayers) return;
 
         vk::DebugUtilsMessageSeverityFlagsEXT severityFlags(vk::DebugUtilsMessageSeverityFlagBitsEXT::eWarning |
                                                        vk::DebugUtilsMessageSeverityFlagBitsEXT::eError);
@@ -137,6 +196,8 @@ private:
     }
     void initVulkan() {
         createInstance();
+        setupDebugMessenger();
+        pickPhysicalDevice();
     }
 
     void mainLoop() {
