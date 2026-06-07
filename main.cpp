@@ -52,44 +52,50 @@ private:
     }
 
     void createLogicalDevice() {
-        std::vector<vk::QueueFamilyProperties> queueFamilyProperties = physicalDevice.getQueueFamilyProperties();
+        // 1. Check if the physical device actually supports the required swapchain extension
+        std::vector<vk::ExtensionProperties> availableExtensions = physicalDevice.enumerateDeviceExtensionProperties();
 
+        bool swapChainSupported = std::ranges::any_of(availableExtensions, [](const auto &ext) {
+            return std::string_view(ext.extensionName) == vk::KHRSwapchainExtensionName;
+        });
+
+        if (!swapChainSupported)  throw std::runtime_error("Required swapchain extension (VK_KHR_swapchain) is not supported by this GPU!");
+
+
+        // 2. Find a queue family that supports both Graphics and Presentation
+        std::vector<vk::QueueFamilyProperties> queueFamilyProperties = physicalDevice.getQueueFamilyProperties();
         uint32_t queueIndex = ~0;
+
         for (uint32_t qfpIndex = 0; qfpIndex < queueFamilyProperties.size(); ++qfpIndex) {
             if ((queueFamilyProperties[qfpIndex].queueFlags & vk::QueueFlagBits::eGraphics) &&
-                    physicalDevice.getSurfaceSupportKHR(qfpIndex, *surface))
-            {
-                // found a queue family that supports both graphics and present
+                physicalDevice.getSurfaceSupportKHR(qfpIndex, *surface)) {
                 queueIndex = qfpIndex;
                 break;
             }
         }
-        if (queueIndex == ~0) throw std::runtime_error("Could not find a queue for graphics and present -> terminating");
 
-        auto graphicsQueueFamilyProperty =
-            std::ranges::find_if(queueFamilyProperties,
-                [](auto const &qfp)
-                { return (qfp.queueFlags & vk::QueueFlagBits::eGraphics) != static_cast<vk::QueueFlags>(0); });
-        auto graphicsIndex = static_cast<uint32_t>(std::distance(queueFamilyProperties.begin(), graphicsQueueFamilyProperty));
-
-        float queuePriority = .5f;
+        if (queueIndex == ~0) throw std::runtime_error("Could not find a queue family supporting both graphics and present -> terminating");
+        
+        // 3. Set up queue creation using the found queueIndex
+        float queuePriority = 0.5f;
         vk::DeviceQueueCreateInfo deviceQueueCreateInfo{
-            .queueFamilyIndex = graphicsIndex,
-            .queueCount = 1, .pQueuePriorities = &queuePriority
+            .queueFamilyIndex = queueIndex, // Use the verified index here
+            .queueCount = 1,
+            .pQueuePriorities = &queuePriority
         };
 
-        // sets everything to false
-        vk::PhysicalDeviceFeatures deviceFeatures;
-
-        // Create a chain of feature structures
-        vk::StructureChain<vk::PhysicalDeviceFeatures2, vk::PhysicalDeviceVulkan13Features, vk::PhysicalDeviceExtendedDynamicStateFeaturesEXT> featureChain = {
-            {},                               // vk::PhysicalDeviceFeatures2 (empty for now)
-            {.dynamicRendering = true },      // Enable dynamic rendering from Vulkan 1.3
-            {.extendedDynamicState = true }   // Enable extended dynamic state from the extension
+        // 4. Configure Vulkan 1.3 features and dynamic states
+        vk::StructureChain<vk::PhysicalDeviceFeatures2, vk::PhysicalDeviceVulkan13Features,
+            vk::PhysicalDeviceExtendedDynamicStateFeaturesEXT> featureChain = {
+            {}, // vk::PhysicalDeviceFeatures2
+            {.dynamicRendering = true}, // Enable dynamic rendering from Vulkan 1.3
+            {.extendedDynamicState = true} // Enable extended dynamic state extension
         };
 
-        std::vector<const char*> requiredDeviceExtension = {vk::KHRSwapchainExtensionName};
+        // 5. Specify extensions to enable
+        std::vector<const char *> requiredDeviceExtension = {vk::KHRSwapchainExtensionName};
 
+        // 6. Create the logical device
         vk::DeviceCreateInfo deviceCreateInfo{
             .pNext = &featureChain.get<vk::PhysicalDeviceFeatures2>(),
             .queueCreateInfoCount = 1,
@@ -98,8 +104,10 @@ private:
             .ppEnabledExtensionNames = requiredDeviceExtension.data()
         };
 
-        device = vk::raii::Device( physicalDevice, deviceCreateInfo );
-        graphicsQueue = vk::raii::Queue(device, graphicsIndex, 0);
+        device = vk::raii::Device(physicalDevice, deviceCreateInfo);
+
+        // 7. Get the handle to our graphics/present queue
+        graphicsQueue = vk::raii::Queue(device, queueIndex, 0);
     }
 
     void pickPhysicalDevice() {
