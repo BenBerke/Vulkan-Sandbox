@@ -50,6 +50,27 @@ private:
     vk::SurfaceFormatKHR   swapChainSurfaceFormat;
     vk::Extent2D           swapChainExtent;
 
+    std::vector<vk::raii::ImageView> swapChainImageViews;
+
+    void createImageViews() {
+        assert(swapChainImageViews.empty());
+
+        vk::ImageViewCreateInfo imageViewCreateInfo {
+            .viewType = vk::ImageViewType::e2D,
+            .format = swapChainSurfaceFormat.format,
+            .subresourceRange = { vk::ImageAspectFlagBits::eColor, 0,1,0,1 }
+        };
+
+        imageViewCreateInfo.components = {
+            vk::ComponentSwizzle::eIdentity, vk::ComponentSwizzle::eIdentity, vk::ComponentSwizzle::eIdentity, vk::ComponentSwizzle::eIdentity
+        };
+
+        for (auto &image : swapChainImages) {
+            imageViewCreateInfo.image = image;
+            swapChainImageViews.emplace_back(device, imageViewCreateInfo);
+        }
+    }
+
     void createSurface() {
         VkSurfaceKHR _surface;
         if (glfwCreateWindowSurface(*instance, window, nullptr, &_surface) != 0)
@@ -214,7 +235,7 @@ private:
 
         // rbegin() points to the highest score automatically
         if (!candidates.empty() && candidates.rbegin()->first > 0) physicalDevice = std ::move(std::prev(candidates.end())->second);
-        else throw std::runtime_error("Failed to find a stitable GPU");
+        else throw std::runtime_error("Failed to find a suitable GPU");
     }
 
     std::vector<const char*> getRequiredInstanceExtensions() {
@@ -333,6 +354,7 @@ private:
         pickPhysicalDevice();
         createLogicalDevice();
         createSwapchain();
+        createImageViews();
     }
 
     void createSwapchain() {
