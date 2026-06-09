@@ -52,6 +52,10 @@ private:
 
     std::vector<vk::raii::ImageView> swapChainImageViews;
 
+    void createGraphicsPipeline() {
+
+    }
+
     void createImageViews() {
         assert(swapChainImageViews.empty());
 
@@ -355,6 +359,7 @@ private:
         createLogicalDevice();
         createSwapchain();
         createImageViews();
+        createGraphicsPipeline();
     }
 
     void createSwapchain() {
