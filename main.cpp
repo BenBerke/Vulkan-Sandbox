@@ -55,6 +55,7 @@ private:
     std::vector<vk::raii::ImageView> swapChainImageViews;
 
     vk::raii::PipelineLayout pipelineLayout = nullptr;
+    vk::raii::Pipeline graphicsPipeline = nullptr;
 
     [[nodiscard]] vk::raii::ShaderModule createShaderModule(const std::vector<char>& code) const
     {
@@ -158,20 +159,26 @@ private:
 
         vk::StructureChain<vk::GraphicsPipelineCreateInfo, vk::PipelineRenderingCreateInfo> pipelineCreateInfoChain = {
             {
-                .stageCount = 2,
-                .pStages = shaderStages,
-                .pVertexInputState = &vertexInputInfo,
+                .stageCount          = 2,
+                .pStages             = shaderStages,
+                .pVertexInputState   = &vertexInputInfo,
                 .pInputAssemblyState = &inputAssembly,
-                .pViewportState = &viewportState,
+                .pViewportState      = &viewportState,
                 .pRasterizationState = &rasterizer,
-                .pMultisampleState = &multisampling,
-                .pColorBlendState = &colorBlending,
-                .pDynamicState = &dynamicState,
-                .layout = pipelineLayout,
-                .renderPass = nullptr
+                .pMultisampleState   = &multisampling,
+                .pColorBlendState    = &colorBlending,
+                .pDynamicState       = &dynamicState,
+                .layout              = pipelineLayout,
+                .renderPass          = nullptr
             },
-            {.colorAttachmentCount = 1, .pColorAttachmentFormats = &swapChainSurfaceFormat.format}
+
+         {
+                .colorAttachmentCount    = 1,
+                .pColorAttachmentFormats = &swapChainSurfaceFormat.format
+            }
         };
+
+        graphicsPipeline = vk::raii::Pipeline(device, nullptr, pipelineCreateInfoChain.get<vk::GraphicsPipelineCreateInfo>());
     }
 
     void createImageViews() {
