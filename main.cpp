@@ -71,27 +71,61 @@ private:
     uint32_t frameIndex = 0;
 
     void drawFrame() {
-        auto fenceResult = device.waitForFences(*inFlightFences[frameIndex], vk::True, UINT64_MAX);
-        if (fenceResult != vk::Result::eSuccess)
-        {
+        auto fenceResult = device.waitForFences(
+            *inFlightFences[frameIndex],
+            vk::True,
+            UINT64_MAX
+        );
+
+        if (fenceResult != vk::Result::eSuccess) {
             throw std::runtime_error("failed to wait for fence!");
         }
+
         device.resetFences(*inFlightFences[frameIndex]);
 
-        auto [result, imageIndex] = swapChain.acquireNextImage(UINT64_MAX, *presentCompleteSemaphores[frameIndex], nullptr);
+        auto [acquireResult, imageIndex] = swapChain.acquireNextImage(
+            UINT64_MAX,
+            *presentCompleteSemaphores[frameIndex],
+            nullptr
+        );
+
+        if (acquireResult != vk::Result::eSuccess &&
+            acquireResult != vk::Result::eSuboptimalKHR) {
+            throw std::runtime_error("failed to acquire swapchain image!");
+            }
 
         commandBuffers[frameIndex].reset();
         recordCommandBuffer(imageIndex);
 
-        vk::PipelineStageFlags waitDestinationStageMask(vk::PipelineStageFlagBits::eColorAttachmentOutput);
-        const vk::SubmitInfo   submitInfo{.waitSemaphoreCount   = 1,
-                                          .pWaitSemaphores      = &*presentCompleteSemaphores[frameIndex],
-                                          .pWaitDstStageMask    = &waitDestinationStageMask,
-                                          .commandBufferCount   = 1,
-                                          .pCommandBuffers      = &*commandBuffers[frameIndex],
-                                          .signalSemaphoreCount = 1,
-                                          .pSignalSemaphores    = &*renderFinishedSemaphores[imageIndex]};
+        vk::PipelineStageFlags waitDestinationStageMask =
+            vk::PipelineStageFlagBits::eColorAttachmentOutput;
+
+        const vk::SubmitInfo submitInfo{
+            .waitSemaphoreCount = 1,
+            .pWaitSemaphores = &*presentCompleteSemaphores[frameIndex],
+            .pWaitDstStageMask = &waitDestinationStageMask,
+            .commandBufferCount = 1,
+            .pCommandBuffers = &*commandBuffers[frameIndex],
+            .signalSemaphoreCount = 1,
+            .pSignalSemaphores = &*renderFinishedSemaphores[imageIndex]
+        };
+
         queue.submit(submitInfo, *inFlightFences[frameIndex]);
+
+        const vk::PresentInfoKHR presentInfo{
+            .waitSemaphoreCount = 1,
+            .pWaitSemaphores = &*renderFinishedSemaphores[imageIndex],
+            .swapchainCount = 1,
+            .pSwapchains = &*swapChain,
+            .pImageIndices = &imageIndex
+        };
+
+        vk::Result presentResult = queue.presentKHR(presentInfo);
+
+        if (presentResult != vk::Result::eSuccess &&
+            presentResult != vk::Result::eSuboptimalKHR) {
+            throw std::runtime_error("failed to present swapchain image!");
+            }
 
         frameIndex = (frameIndex + 1) % MAX_FRAMES_IN_FLIGHT;
     }
@@ -113,14 +147,15 @@ private:
     }
 
     void transition_image_layout(
-        uint32_t imageIndex,
-        vk::ImageLayout oldLayout,
-        vk::ImageLayout newLayout,
-        vk::AccessFlags2 srcAccessMask,
-        vk::AccessFlags2 dstAccessMask,
-        vk::PipelineStageFlags2 srcStageMask,
-        vk::PipelineStageFlags2 dstStageMask
-    ) {
+        const vk::raii::CommandBuffer &commandBuffer,
+        const uint32_t imageIndex,
+        const vk::ImageLayout oldLayout,
+        const vk::ImageLayout newLayout,
+        const vk::AccessFlags2 srcAccessMask,
+        const vk::AccessFlags2 dstAccessMask,
+        const vk::PipelineStageFlags2 srcStageMask,
+        const vk::PipelineStageFlags2 dstStageMask
+    ) const {
         vk::ImageMemoryBarrier2 barrier{
             .srcStageMask = srcStageMask,
             .srcAccessMask = srcAccessMask,
@@ -150,9 +185,12 @@ private:
     }
 
     void recordCommandBuffer(uint32_t imageIndex) {
-        commandBuffer.begin({});
+        vk::raii::CommandBuffer &commandBuffer = commandBuffers[frameIndex];
+
+        commandBuffer.begin(vk::CommandBufferBeginInfo{});
 
         transition_image_layout(
+            commandBuffer,
             imageIndex,
             vk::ImageLayout::eUndefined,
             vk::ImageLayout::eColorAttachmentOptimal,
@@ -218,6 +256,7 @@ private:
         commandBuffer.endRendering();
 
         transition_image_layout(
+            commandBuffer,
             imageIndex,
             vk::ImageLayout::eColorAttachmentOptimal,
             vk::ImageLayout::ePresentSrcKHR,
