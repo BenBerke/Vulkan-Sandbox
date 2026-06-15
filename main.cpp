@@ -1,3 +1,4 @@
+#define VULKAN_HPP_HANDLE_ERROR_OUT_OF_DATE_AS_SUCCESS
 #define VULKAN_HPP_NO_STRUCT_CONSTRUCTORS
 #include <vulkan/vulkan_raii.hpp>
 
@@ -70,6 +71,8 @@ private:
 
     uint32_t frameIndex = 0;
 
+    bool framebufferResized = false;
+
     void drawFrame() {
         auto fenceResult = device.waitForFences(
             *inFlightFences[frameIndex],
@@ -83,22 +86,24 @@ private:
 
         device.resetFences(*inFlightFences[frameIndex]);
 
-        auto [acquireResult, imageIndex] = swapChain.acquireNextImage(
-            UINT64_MAX,
-            *presentCompleteSemaphores[frameIndex],
-            nullptr
-        );
+        auto [result, imageIndex] = swapChain.acquireNextImage(UINT64_MAX, *presentCompleteSemaphores[frameIndex], nullptr);
 
-        if (acquireResult != vk::Result::eSuccess &&
-            acquireResult != vk::Result::eSuboptimalKHR) {
-            throw std::runtime_error("failed to acquire swapchain image!");
-            }
+        if (result == vk::Result::eErrorOutOfDateKHR || result == vk::Result::eSuboptimalKHR || framebufferResized)
+        {
+            framebufferResized = false;
+            recreateSwapChain();
+        }
+        if (result != vk::Result::eSuccess && result != vk::Result::eSuboptimalKHR){
+            assert(result == vk::Result::eTimeout || result == vk::Result::eNotReady);
+            throw std::runtime_error("failed to acquire swap chain image!");
+        }
+
+        device.resetFences(*inFlightFences[frameIndex]);
 
         commandBuffers[frameIndex].reset();
         recordCommandBuffer(imageIndex);
 
-        vk::PipelineStageFlags waitDestinationStageMask =
-            vk::PipelineStageFlagBits::eColorAttachmentOutput;
+        vk::PipelineStageFlags waitDestinationStageMask =vk::PipelineStageFlagBits::eColorAttachmentOutput;
 
         const vk::SubmitInfo submitInfo{
             .waitSemaphoreCount = 1,
@@ -112,20 +117,15 @@ private:
 
         queue.submit(submitInfo, *inFlightFences[frameIndex]);
 
-        const vk::PresentInfoKHR presentInfo{
-            .waitSemaphoreCount = 1,
-            .pWaitSemaphores = &*renderFinishedSemaphores[imageIndex],
-            .swapchainCount = 1,
-            .pSwapchains = &*swapChain,
-            .pImageIndices = &imageIndex
-        };
-
-        vk::Result presentResult = queue.presentKHR(presentInfo);
-
-        if (presentResult != vk::Result::eSuccess &&
-            presentResult != vk::Result::eSuboptimalKHR) {
-            throw std::runtime_error("failed to present swapchain image!");
-            }
+        const vk::PresentInfoKHR presentInfoKHR{.waitSemaphoreCount = 1,
+                                        .pWaitSemaphores    = &*renderFinishedSemaphores[imageIndex],
+                                        .swapchainCount     = 1,
+                                        .pSwapchains        = &*swapChain,
+                                        .pImageIndices      = &imageIndex};
+        result = queue.presentKHR(presentInfoKHR);
+        if ((result == vk::Result::eSuboptimalKHR) || (result == vk::Result::eErrorOutOfDateKHR)) recreateSwapChain();
+        else // There are no other success codes than eSuccess; on any error code, presentKHR already threw an exception.
+            assert(result == vk::Result::eSuccess);
 
         frameIndex = (frameIndex + 1) % MAX_FRAMES_IN_FLIGHT;
     }
@@ -698,9 +698,17 @@ private:
         glfwInit();
 
         glfwWindowHint(GLFW_CLIENT_API, GLFW_NO_API);
-        glfwWindowHint(GLFW_RESIZABLE, GLFW_FALSE);
+        glfwWindowHint(GLFW_RESIZABLE, GLFW_TRUE);
 
         window = glfwCreateWindow(WIDTH, HEIGHT, "Vulkan", nullptr, nullptr);
+        glfwSetWindowUserPointer(window, this);
+        glfwSetFramebufferSizeCallback(window, framebufferResizeCallback);
+    }
+
+    static void framebufferResizeCallback(GLFWwindow* window, int width, int height)
+    {
+        auto app = reinterpret_cast<HelloTriangleApplication*>(glfwGetWindowUserPointer(window));
+        app->framebufferResized = true;
     }
 
     void initVulkan() {
@@ -709,7 +717,7 @@ private:
         createSurface();
         pickPhysicalDevice();
         createLogicalDevice();
-        createSwapchain();
+        createSwapChain();
         createImageViews();
         createGraphicsPipeline();
         createCommandPool();
@@ -717,7 +725,7 @@ private:
         createSyncObjects();
     }
 
-    void createSwapchain() {
+    void createSwapChain() {
         const vk::SurfaceCapabilitiesKHR surfaceCapabilities =
             physicalDevice.getSurfaceCapabilitiesKHR(*surface);
 
@@ -750,6 +758,27 @@ private:
         swapChain = vk::raii::SwapchainKHR(device, swapChainCreateInfo);
         swapChainImages = swapChain.getImages();
     }
+
+    void cleanupSwapChain() {
+        swapChainImageViews.clear();
+        swapChain = nullptr;
+    }
+
+    void recreateSwapChain() {
+        int width = 0, height = 0;
+        glfwGetFramebufferSize(window, &width, &height);
+        while (width == 0 || height == 0) {
+            glfwGetFramebufferSize(window, &width, &height);
+            glfwWaitEvents();
+        }
+        
+        device.waitIdle();
+
+        cleanupSwapChain();
+
+        createSwapChain();
+        createImageViews();
+    }
     //endregion
 
     void mainLoop() {
@@ -762,6 +791,7 @@ private:
     }
 
     void cleanup() {
+        cleanupSwapChain();
         glfwDestroyWindow(window);
         glfwTerminate();
     }
