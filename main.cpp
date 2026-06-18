@@ -156,8 +156,7 @@ private:
         frameIndex = (frameIndex + 1) % MAX_FRAMES_IN_FLIGHT;
     }
 
-        std::pair<vk::raii::Buffer, vk::raii::DeviceMemory> createBuffer(vk::DeviceSize size, vk::BufferUsageFlags usage, vk::MemoryPropertyFlags properties)
-        {
+        std::pair<vk::raii::Buffer, vk::raii::DeviceMemory> createBuffer(const vk::DeviceSize size, const vk::BufferUsageFlags usage, vk::MemoryPropertyFlags properties) const {
             vk::BufferCreateInfo   bufferInfo{.size = size, .usage = usage, .sharingMode = vk::SharingMode::eExclusive};
             vk::raii::Buffer       buffer          = vk::raii::Buffer(device, bufferInfo);
             vk::MemoryRequirements memRequirements = buffer.getMemoryRequirements();
@@ -169,30 +168,51 @@ private:
 
         //region setup
 
-        uint32_t findMemoryType(uint32_t typeFilter, vk::MemoryPropertyFlags properties) {
-            vk::PhysicalDeviceMemoryProperties memProperties = physicalDevice.getMemoryProperties();
+    [[nodiscard]] uint32_t findMemoryType(const uint32_t typeFilter, const vk::MemoryPropertyFlags properties) const {
+        vk::PhysicalDeviceMemoryProperties memProperties = physicalDevice.getMemoryProperties();
 
-            for (uint32_t i = 0; i < memProperties.memoryTypeCount; i++)
-                if ((typeFilter & (1 << i)) && (memProperties.memoryTypes[i].propertyFlags & properties) == properties) return i;
+        for (uint32_t i = 0; i < memProperties.memoryTypeCount; i++)
+            if ((typeFilter & (1 << i)) && (memProperties.memoryTypes[i].propertyFlags & properties) == properties)
+                return i;
 
-            throw std::runtime_error("Failed to find suitable memory type");
-        }
+        throw std::runtime_error("Failed to find suitable memory type");
+    }
+
+    void copyBuffer(const vk::raii::Buffer & srcBuffer, const vk::raii::Buffer & dstBuffer, vk::DeviceSize size) const {
+        const vk::CommandBufferAllocateInfo allocInfo{
+            .commandPool = commandPool,
+            .level = vk::CommandBufferLevel::ePrimary,
+            .commandBufferCount = 1,
+        };
+
+        const vk::raii::CommandBuffer commandCopyBuffer = std::move(device.allocateCommandBuffers(allocInfo).front());
+
+        commandCopyBuffer.begin({.flags = vk::CommandBufferUsageFlagBits::eOneTimeSubmit});
+
+        commandCopyBuffer.copyBuffer(*srcBuffer, *dstBuffer, vk::BufferCopy(0, 0, size));
+
+        commandCopyBuffer.end();
+
+        queue.submit(vk::SubmitInfo{.commandBufferCount = 1, .pCommandBuffers = &*commandCopyBuffer}, nullptr);
+        queue.waitIdle();
+    }
 
     void createVertexBuffer() {
         vk::DeviceSize bufferSize = sizeof(vertices[0]) * vertices.size();
 
-        auto [buffer, memory] = createBuffer(
-            bufferSize,
-            vk::BufferUsageFlagBits::eVertexBuffer,
-            vk::MemoryPropertyFlagBits::eHostVisible | vk::MemoryPropertyFlagBits::eHostCoherent
-        );
+        auto [stagingBuffer, stagingBufferMemory] =
+                createBuffer(bufferSize, vk::BufferUsageFlagBits::eTransferSrc,
+                                   vk::MemoryPropertyFlagBits::eHostVisible |
+                                            vk::MemoryPropertyFlagBits::eHostCoherent);
 
-        vertexBuffer = std::move(buffer);
-        vertexBufferMemory = std::move(memory);
+        void* dataStaging = stagingBufferMemory.mapMemory(0, bufferSize);
+        memcpy(dataStaging, vertices.data(), bufferSize);
+        stagingBufferMemory.unmapMemory();
 
-        void* data = vertexBufferMemory.mapMemory(0, bufferSize);
-        memcpy(data, vertices.data(), bufferSize);
-        vertexBufferMemory.unmapMemory();
+        std::tie(vertexBuffer, vertexBufferMemory) = createBuffer(bufferSize,
+                                                           vk::BufferUsageFlagBits::eVertexBuffer |
+                                                           vk::BufferUsageFlagBits::eTransferDst, vk::MemoryPropertyFlagBits::eDeviceLocal);
+        copyBuffer(stagingBuffer, vertexBuffer, bufferSize);
     }
 
     void createSyncObjects()
