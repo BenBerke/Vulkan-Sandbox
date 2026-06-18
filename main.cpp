@@ -156,39 +156,42 @@ private:
         frameIndex = (frameIndex + 1) % MAX_FRAMES_IN_FLIGHT;
     }
 
-    //region setup
+        std::pair<vk::raii::Buffer, vk::raii::DeviceMemory> createBuffer(vk::DeviceSize size, vk::BufferUsageFlags usage, vk::MemoryPropertyFlags properties)
+        {
+            vk::BufferCreateInfo   bufferInfo{.size = size, .usage = usage, .sharingMode = vk::SharingMode::eExclusive};
+            vk::raii::Buffer       buffer          = vk::raii::Buffer(device, bufferInfo);
+            vk::MemoryRequirements memRequirements = buffer.getMemoryRequirements();
+            vk::MemoryAllocateInfo allocInfo{.allocationSize = memRequirements.size, .memoryTypeIndex = findMemoryType(memRequirements.memoryTypeBits, properties)};
+            vk::raii::DeviceMemory bufferMemory = vk::raii::DeviceMemory(device, allocInfo);
+            buffer.bindMemory(*bufferMemory, 0);
+            return {std::move(buffer), std::move(bufferMemory)};
+        }
 
-    uint32_t findMemoryType(uint32_t typeFilter, vk::MemoryPropertyFlags properties) {
-        vk::PhysicalDeviceMemoryProperties memProperties = physicalDevice.getMemoryProperties();
+        //region setup
 
-        for (uint32_t i = 0; i < memProperties.memoryTypeCount; i++)
-            if ((typeFilter & (1 << i)) && (memProperties.memoryTypes[i].propertyFlags & properties) == properties) return i;
+        uint32_t findMemoryType(uint32_t typeFilter, vk::MemoryPropertyFlags properties) {
+            vk::PhysicalDeviceMemoryProperties memProperties = physicalDevice.getMemoryProperties();
 
-        throw std::runtime_error("Failed to find suitable memory type");
-    }
+            for (uint32_t i = 0; i < memProperties.memoryTypeCount; i++)
+                if ((typeFilter & (1 << i)) && (memProperties.memoryTypes[i].propertyFlags & properties) == properties) return i;
 
-    void createVertextBuffer() {
-        vk::BufferCreateInfo bufferInfo{
-            .size = sizeof(vertices[0]) * vertices.size(),
-            .usage = vk::BufferUsageFlagBits::eVertexBuffer,
-            .sharingMode = vk::SharingMode::eExclusive
-        };
+            throw std::runtime_error("Failed to find suitable memory type");
+        }
 
-        vertexBuffer = vk::raii::Buffer(device, bufferInfo);
+    void createVertexBuffer() {
+        vk::DeviceSize bufferSize = sizeof(vertices[0]) * vertices.size();
 
-        vk::MemoryRequirements memRequirements = vertexBuffer.getMemoryRequirements();
-        vk::MemoryAllocateInfo memoryAllocateInfo{
-            .allocationSize = memRequirements.size,
-            .memoryTypeIndex = findMemoryType(memRequirements.memoryTypeBits,
-                                              vk::MemoryPropertyFlagBits::eHostVisible |
-                                              vk::MemoryPropertyFlagBits::eHostCoherent)
-        };
+        auto [buffer, memory] = createBuffer(
+            bufferSize,
+            vk::BufferUsageFlagBits::eVertexBuffer,
+            vk::MemoryPropertyFlagBits::eHostVisible | vk::MemoryPropertyFlagBits::eHostCoherent
+        );
 
-        vertexBufferMemory = vk::raii::DeviceMemory(device, memoryAllocateInfo);
-        vertexBuffer.bindMemory( *vertexBufferMemory, 0);
+        vertexBuffer = std::move(buffer);
+        vertexBufferMemory = std::move(memory);
 
-        void* data = vertexBufferMemory.mapMemory(0, bufferInfo.size);
-        memcpy(data, vertices.data(), bufferInfo.size);
+        void* data = vertexBufferMemory.mapMemory(0, bufferSize);
+        memcpy(data, vertices.data(), bufferSize);
         vertexBufferMemory.unmapMemory();
     }
 
@@ -313,7 +316,7 @@ private:
 
         commandBuffer.bindPipeline(vk::PipelineBindPoint::eGraphics, *graphicsPipeline);
         commandBuffer.bindVertexBuffers(0, *vertexBuffer, {0});
-        
+
         commandBuffer.draw(static_cast<uint32_t>(vertices.size()), 1, 0, 0);
 
         commandBuffer.endRendering();
@@ -792,7 +795,7 @@ private:
         createImageViews();
         createGraphicsPipeline();
         createCommandPool();
-        createVertextBuffer();
+        createVertexBuffer();
         createCommandBuffers();
         createSyncObjects();
     }
