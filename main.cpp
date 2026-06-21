@@ -107,6 +107,12 @@ private:
     vk::raii::Buffer indexBuffer = nullptr;
     vk::raii::DeviceMemory indexBufferMemory = nullptr;
 
+    struct UniformBufferObject {
+        glm::mat4 model;
+        glm::mat4 view;
+        glm::mat4 proj;
+    };
+
     void drawFrame() {
         auto fenceResult = device.waitForFences(
             *inFlightFences[frameIndex],
@@ -391,16 +397,20 @@ private:
     }
 
     void createCommandPool() {
-        const vk::CommandPoolCreateInfo poolInfo{.flags            = vk::CommandPoolCreateFlagBits::eResetCommandBuffer,
-                                            .queueFamilyIndex = queueIndex};
+        const vk::CommandPoolCreateInfo poolInfo{
+            .flags = vk::CommandPoolCreateFlagBits::eResetCommandBuffer,
+            .queueFamilyIndex = queueIndex
+        };
 
         commandPool = vk::raii::CommandPool(device, poolInfo);
     }
 
     [[nodiscard]] vk::raii::ShaderModule createShaderModule(const std::vector<char>& code) const
     {
-        const vk::ShaderModuleCreateInfo createInfo{ .codeSize = code.size() * sizeof(char), .pCode = reinterpret_cast<const uint32_t*>(code.data()) };
-        vk::raii::ShaderModule shaderModule{ device, createInfo };
+        const vk::ShaderModuleCreateInfo createInfo{
+            .codeSize = code.size() * sizeof(char), .pCode = reinterpret_cast<const uint32_t *>(code.data())
+        };
+        vk::raii::ShaderModule shaderModule{device, createInfo};
         return shaderModule;
     }
 
