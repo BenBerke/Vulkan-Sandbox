@@ -87,6 +87,8 @@ private:
 
     std::vector<vk::raii::ImageView> swapChainImageViews;
 
+    vk::raii::DescriptorSetLayout descriptorSetLayout = nullptr;
+
     vk::raii::PipelineLayout pipelineLayout = nullptr;
     vk::raii::Pipeline graphicsPipeline = nullptr;
 
@@ -181,6 +183,29 @@ private:
         }
 
     //region setup
+
+    void createDescriptorSetLayout()
+    {
+        vk::DescriptorSetLayoutBinding uboLayoutBinding{
+            .binding = 0,
+            .descriptorType = vk::DescriptorType::eUniformBuffer,
+            .descriptorCount = 1,
+            .stageFlags = vk::ShaderStageFlagBits::eVertex
+        };
+
+        vk::DescriptorSetLayoutCreateInfo layoutInfo{
+            .bindingCount = 1,
+            .pBindings = &uboLayoutBinding
+        };
+
+        descriptorSetLayout = vk::raii::DescriptorSetLayout(device, layoutInfo);
+
+        vk::PipelineLayoutCreateInfo pipelineLayoutInfo{
+            .setLayoutCount = 1,
+            .pSetLayouts = &*descriptorSetLayout,
+            .pushConstantRangeCount = 0
+        };
+    }
 
     void createIndexBuffer()
     {
@@ -849,6 +874,7 @@ private:
         createLogicalDevice();
         createSwapChain();
         createImageViews();
+        createDescriptorSetLayout();
         createGraphicsPipeline();
         createCommandPool();
         createVertexBuffer();
