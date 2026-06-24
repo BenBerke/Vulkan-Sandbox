@@ -127,6 +127,9 @@ private:
         glm::mat4 proj;
     };
 
+    vk::raii::Image textureImage = nullptr;
+    vk::raii::DeviceMemory textureImageMemory = nullptr;
+
 
     void updateUniformBuffer(uint32_t currentImage) {
         static auto startTime = std::chrono::high_resolution_clock::now();
@@ -219,12 +222,60 @@ private:
 
     //region setup
 
+    std::pair<vk::raii::Image, vk::raii::DeviceMemory> createImage(
+        const uint32_t width, const uint32_t height, const vk::Format format,
+        const vk::ImageTiling tiling, const vk::ImageUsageFlags usage,
+        const vk::MemoryPropertyFlags properties)
+    {
+        const vk::ImageCreateInfo imageInfo{
+            .imageType = vk::ImageType::e2D,
+            .format = format,
+            .extent = {width, height, 1},
+            .mipLevels = 1,
+            .arrayLayers = 1,
+            .samples = vk::SampleCountFlagBits::e1,
+            .tiling = tiling,
+            .usage = usage,
+            .sharingMode = vk::SharingMode::eExclusive
+        };
+
+        vk::raii::Image image = vk::raii::Image(device, imageInfo);
+
+        vk::MemoryRequirements memRequirements = image.getMemoryRequirements();
+        vk::MemoryAllocateInfo allocInfo{
+            .allocationSize = memRequirements.size,
+            .memoryTypeIndex = findMemoryType(memRequirements.memoryTypeBits, properties)
+        };
+        vk::raii::DeviceMemory imageMemory = vk::raii::DeviceMemory(device, allocInfo);
+        image.bindMemory(imageMemory, 0);
+
+        return {std::move(image), std::move(imageMemory)};
+    }
+
     void createTextureImage() {
         int texWidth, texHeight, texChannels;
-        stbi_uc *pixels = stbi_load("textures/statue.jpg",&texWidth, &texHeight, &texChannels, STBI_rgb_alpha);
+        stbi_uc *pixels = stbi_load("textures/texture.jpg", &texWidth, &texHeight, &texChannels, STBI_rgb_alpha);
         vk::DeviceSize imageSize = texWidth * texHeight * 4;
 
         if (!pixels) throw std::runtime_error("failed to load texture image!");
+
+        auto [stagingBuffer, stagingBufferMemory] =
+                createBuffer(imageSize, vk::BufferUsageFlagBits::eTransferSrc,
+                             vk::MemoryPropertyFlagBits::eHostVisible | vk::MemoryPropertyFlagBits::eHostCoherent);
+
+        void *data = stagingBufferMemory.mapMemory(0, imageSize);
+        memcpy(data, pixels, imageSize);
+        stagingBufferMemory.unmapMemory();
+
+        stbi_image_free(pixels);
+
+        std::tie(textureImage, textureImageMemory) = createImage(texWidth,
+                                                                 texHeight,
+                                                                 vk::Format::eR8G8B8A8Srgb,
+                                                                 vk::ImageTiling::eOptimal,
+                                                                 vk::ImageUsageFlagBits::eTransferDst |
+                                                                 vk::ImageUsageFlagBits::eSampled,
+                                                                 vk::MemoryPropertyFlagBits::eDeviceLocal);
     }
 
     void createDescriptorSets() {
