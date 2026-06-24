@@ -222,6 +222,21 @@ private:
 
     //region setup
 
+    void transitionImageLayout(vk::raii::CommandBuffer &commandBuffer, const vk::raii::Image &image,
+        vk::ImageLayout oldLayout, vk::ImageLayout newLayout)
+    {
+        vk::ImageMemoryBarrier barrier{
+            .oldLayout = oldLayout,
+            .newLayout = newLayout,
+            .srcQueueFamilyIndex = vk::QueueFamilyIgnored,
+            .dstQueueFamilyIndex = vk::QueueFamilyIgnored,
+            .image = image,
+            .subresourceRange = {.aspectMask = vk::ImageAspectFlagBits::eColor, .levelCount = 1, .layerCount = 1}
+        };
+
+
+    }
+
     std::pair<vk::raii::Image, vk::raii::DeviceMemory> createImage(
         const uint32_t width, const uint32_t height, const vk::Format format,
         const vk::ImageTiling tiling, const vk::ImageUsageFlags usage,
@@ -376,23 +391,29 @@ private:
         throw std::runtime_error("Failed to find suitable memory type");
     }
 
-    void copyBuffer(const vk::raii::Buffer & srcBuffer, const vk::raii::Buffer & dstBuffer, vk::DeviceSize size) const {
-        const vk::CommandBufferAllocateInfo allocInfo{
-            .commandPool = commandPool,
-            .level = vk::CommandBufferLevel::ePrimary,
-            .commandBufferCount = 1,
-        };
+    [[nodiscard]] vk::raii::CommandBuffer beginSingleTimeCommands() const {
+        vk::CommandBufferAllocateInfo allocInfo{.commandPool = commandPool, .level = vk::CommandBufferLevel::ePrimary, .commandBufferCount = 1};
+        vk::raii::CommandBuffer       commandBuffer = std::move(vk::raii::CommandBuffers(device, allocInfo).front());
 
-        const vk::raii::CommandBuffer commandCopyBuffer = std::move(device.allocateCommandBuffers(allocInfo).front());
+        vk::CommandBufferBeginInfo beginInfo{.flags = vk::CommandBufferUsageFlagBits::eOneTimeSubmit};
+        commandBuffer.begin(beginInfo);
 
-        commandCopyBuffer.begin({.flags = vk::CommandBufferUsageFlagBits::eOneTimeSubmit});
+        return std::move(commandBuffer);
+    }
 
-        commandCopyBuffer.copyBuffer(*srcBuffer, *dstBuffer, vk::BufferCopy(0, 0, size));
+    void endSingleTimeCommands(vk::raii::CommandBuffer &&commandBuffer) const {
+        commandBuffer.end();
 
-        commandCopyBuffer.end();
-
-        queue.submit(vk::SubmitInfo{.commandBufferCount = 1, .pCommandBuffers = &*commandCopyBuffer}, nullptr);
+        vk::SubmitInfo submitInfo{.commandBufferCount = 1, .pCommandBuffers = &*commandBuffer};
+        queue.submit(submitInfo, nullptr);
         queue.waitIdle();
+    }
+
+    void copyBuffer(const vk::raii::Buffer &srcBuffer, const vk::raii::Buffer &dstBuffer, const vk::DeviceSize size)
+    {
+        vk::raii::CommandBuffer commandCopyBuffer = beginSingleTimeCommands();
+        commandCopyBuffer.copyBuffer(*srcBuffer, *dstBuffer, vk::BufferCopy{.size = size});
+        endSingleTimeCommands(std::move(commandCopyBuffer));
     }
 
     void createVertexBuffer() {
