@@ -233,8 +233,6 @@ private:
             .image = image,
             .subresourceRange = {.aspectMask = vk::ImageAspectFlagBits::eColor, .levelCount = 1, .layerCount = 1}
         };
-
-
     }
 
     std::pair<vk::raii::Image, vk::raii::DeviceMemory> createImage(
