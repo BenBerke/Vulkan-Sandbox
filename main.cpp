@@ -207,7 +207,7 @@ private:
 
     std::pair<vk::raii::Buffer, vk::raii::DeviceMemory> createBuffer(const vk::DeviceSize size,
                                                                      const vk::BufferUsageFlags usage,
-                                                                     vk::MemoryPropertyFlags properties) const {
+                                                                     const vk::MemoryPropertyFlags properties) const {
         vk::BufferCreateInfo bufferInfo{.size = size, .usage = usage, .sharingMode = vk::SharingMode::eExclusive};
         vk::raii::Buffer buffer = vk::raii::Buffer(device, bufferInfo);
         vk::MemoryRequirements memRequirements = buffer.getMemoryRequirements();
