@@ -35,26 +35,28 @@ constexpr bool enableValidationLayers = true;
 
 constexpr int MAX_FRAMES_IN_FLIGHT = 2;
 
-struct Vertex {
+struct Vertex
+{
     glm::vec2 pos;
-    glm::vec3 color;
+    glm::vec2 texCoord;
 
-    static vk::VertexInputBindingDescription getBindingDescription(){
-        return {.binding = 0, .stride = sizeof(Vertex), .inputRate = vk::VertexInputRate::eVertex};
+    static vk::VertexInputBindingDescription getBindingDescription()
+    {
+        return { 0, sizeof(Vertex), vk::VertexInputRate::eVertex };
     }
 
     static std::array<vk::VertexInputAttributeDescription, 2> getAttributeDescriptions()
     {
         return {{{.location = 0, .binding = 0, .format = vk::Format::eR32G32Sfloat, .offset = offsetof(Vertex, pos)},
-                 {.location = 1, .binding = 0, .format = vk::Format::eR32G32B32Sfloat, .offset = offsetof(Vertex, color)}}};
+                 {.location = 1, .binding = 0, .format = vk::Format::eR32G32Sfloat, .offset = offsetof(Vertex, texCoord)}}};
     }
 };
 
 const std::vector<Vertex> vertices = {
-    {{-0.5f, -0.5f}, {1.0f, 0.0f, 0.0f}},
-    {{0.5f, -0.5f}, {0.0f, 1.0f, 0.0f}},
-    {{0.5f, 0.5f}, {0.0f, 0.0f, 1.0f}},
-    {{-0.5f, 0.5f}, {1.0f, 1.0f, 1.0f}}
+    {{-0.5f, -0.5f}, {1.0f, 0.0f}},
+    {{ 0.5f, -0.5f}, {0.0f, 0.0f}},
+    {{ 0.5f,  0.5f}, {0.0f, 1.0f}},
+    {{-0.5f,  0.5f}, {1.0f, 1.0f}}
 };
 
 const std::vector<uint16_t> indices = {
@@ -226,12 +228,18 @@ private:
 
     void copyBufferToImage(vk::raii::CommandBuffer &commandBuffer, const vk::raii::Buffer &buffer, vk::raii::Image &image, uint32_t width, uint32_t height)
     {
-        vk::BufferImageCopy region {
+        vk::BufferImageCopy region{
             .bufferOffset = 0,
             .bufferRowLength = 0,
             .bufferImageHeight = 0,
-            .imageSubresource = {.aspectMask = vk::ImageAspectFlagBits::eColor, .mipLevel = 0, .baseArrayLayer = 0, .layerCount = 1},
+            .imageSubresource = {
+                .aspectMask = vk::ImageAspectFlagBits::eColor,
+                .mipLevel = 0,
+                .baseArrayLayer = 0,
+                .layerCount = 1
+            },
             .imageOffset = {0, 0, 0},
+            .imageExtent = {width, height, 1}
         };
 
         commandBuffer.copyBufferToImage(buffer, image, vk::ImageLayout::eTransferDstOptimal, region);
@@ -390,27 +398,46 @@ private:
                 .offset = 0,
                 .range = sizeof(UniformBufferObject)
             };
-
-            vk::WriteDescriptorSet descriptorWrite{
-                .dstSet = descriptorSets[i],
-                .dstBinding = 0,
-                .dstArrayElement = 0,
-                .descriptorCount = 1,
-                .descriptorType = vk::DescriptorType::eUniformBuffer,
-                .pBufferInfo = &bufferInfo
+            vk::DescriptorImageInfo imageInfo{
+                .sampler = textureSampler,
+                .imageView = textureImageView,
+                .imageLayout = vk::ImageLayout::eShaderReadOnlyOptimal
             };
 
-            device.updateDescriptorSets(descriptorWrite, {});
+            std::array<vk::WriteDescriptorSet, 2> descriptorWrites{{{.dstSet          = descriptorSets[i],
+                                                         .dstBinding      = 0,
+                                                         .dstArrayElement = 0,
+                                                         .descriptorCount = 1,
+                                                         .descriptorType  = vk::DescriptorType::eUniformBuffer,
+                                                         .pBufferInfo     = &bufferInfo},
+                                                        {.dstSet          = descriptorSets[i],
+                                                         .dstBinding      = 1,
+                                                         .dstArrayElement = 0,
+                                                         .descriptorCount = 1,
+                                                         .descriptorType  = vk::DescriptorType::eCombinedImageSampler,
+                                                         .pImageInfo      = &imageInfo}}};
+            device.updateDescriptorSets(descriptorWrites, {});
         }
     }
 
     void createDescriptorPool() {
-        vk::DescriptorPoolSize poolSize{ .type = vk::DescriptorType::eUniformBuffer, .descriptorCount = MAX_FRAMES_IN_FLIGHT };
+        std::array<vk::DescriptorPoolSize, 2> poolSize{
+            {
+                {
+                    .type = vk::DescriptorType::eUniformBuffer,
+                    .descriptorCount = MAX_FRAMES_IN_FLIGHT
+                },
+                {
+                    .type = vk::DescriptorType::eCombinedImageSampler,
+                    .descriptorCount = MAX_FRAMES_IN_FLIGHT
+                }
+            }
+        };
         vk::DescriptorPoolCreateInfo poolInfo{
             .flags = vk::DescriptorPoolCreateFlagBits::eFreeDescriptorSet,
             .maxSets = MAX_FRAMES_IN_FLIGHT,
-            .poolSizeCount = 1,
-            .pPoolSizes = &poolSize
+            .poolSizeCount = static_cast<uint32_t>(poolSize.size()),
+            .pPoolSizes = poolSize.data()
         };
 
         descriptorPool = vk::raii::DescriptorPool(device, poolInfo);
@@ -436,10 +463,24 @@ private:
             .stageFlags = vk::ShaderStageFlagBits::eVertex
         };
 
-        vk::DescriptorSetLayoutCreateInfo layoutInfo{
-            .bindingCount = 1,
-            .pBindings = &uboLayoutBinding
+        std::array<vk::DescriptorSetLayoutBinding, 2> bindings{
+            {
+                {
+                    .binding = 0,
+                    .descriptorType = vk::DescriptorType::eUniformBuffer,
+                    .descriptorCount = 1,
+                    .stageFlags = vk::ShaderStageFlagBits::eVertex
+                },
+                {
+                    .binding = 1,
+                    .descriptorType = vk::DescriptorType::eCombinedImageSampler,
+                    .descriptorCount = 1,
+                    .stageFlags = vk::ShaderStageFlagBits::eFragment
+                }
+            }
         };
+
+        vk::DescriptorSetLayoutCreateInfo layoutInfo{.bindingCount = static_cast<uint32_t>(bindings.size()), .pBindings = bindings.data()};
 
         descriptorSetLayout = vk::raii::DescriptorSetLayout(device, layoutInfo);
     }
