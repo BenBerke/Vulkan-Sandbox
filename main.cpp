@@ -222,6 +222,19 @@ private:
 
     //region setup
 
+    void copyBufferToImage(vk::raii::CommandBuffer &commandBuffer, const vk::raii::Buffer &buffer, vk::raii::Image &image, uint32_t width, uint32_t height)
+    {
+        vk::BufferImageCopy region {
+            .bufferOffset = 0,
+            .bufferRowLength = 0,
+            .bufferImageHeight = 0,
+            .imageSubresource = {.aspectMask = vk::ImageAspectFlagBits::eColor, .mipLevel = 0, .baseArrayLayer = 0, .layerCount = 1},
+            .imageOffset = {0, 0, 0},
+        };
+
+        commandBuffer.copyBufferToImage(buffer, image, vk::ImageLayout::eTransferDstOptimal, region);
+    }
+
     void transitionImageLayout(vk::raii::CommandBuffer &commandBuffer, const vk::raii::Image &image,
         vk::ImageLayout oldLayout, vk::ImageLayout newLayout)
     {
@@ -233,6 +246,33 @@ private:
             .image = image,
             .subresourceRange = {.aspectMask = vk::ImageAspectFlagBits::eColor, .levelCount = 1, .layerCount = 1}
         };
+
+        vk::PipelineStageFlags sourceStage;
+        vk::PipelineStageFlags destinationStage;
+
+        if (oldLayout == vk::ImageLayout::eUndefined && newLayout == vk::ImageLayout::eTransferDstOptimal) {
+            barrier.srcAccessMask = {};
+            barrier.dstAccessMask = vk::AccessFlagBits::eTransferWrite;
+
+            sourceStage = vk::PipelineStageFlagBits::eTopOfPipe;
+            destinationStage = vk::PipelineStageFlagBits::eTransfer;
+        }
+        else if (oldLayout == vk::ImageLayout::eTransferDstOptimal && newLayout == vk::ImageLayout::eShaderReadOnlyOptimal) {
+            barrier.srcAccessMask = vk::AccessFlagBits::eTransferWrite;
+            barrier.dstAccessMask = vk::AccessFlagBits::eShaderRead;
+
+            sourceStage = vk::PipelineStageFlagBits::eTransfer;
+            destinationStage = vk::PipelineStageFlagBits::eFragmentShader;
+        }
+        else throw std::invalid_argument("unsupported layout transition!");
+
+        commandBuffer.pipelineBarrier(
+            sourceStage,
+            destinationStage, {},
+            {},
+            nullptr,
+            barrier
+        );
     }
 
     std::pair<vk::raii::Image, vk::raii::DeviceMemory> createImage(
@@ -289,6 +329,32 @@ private:
                                                                  vk::ImageUsageFlagBits::eTransferDst |
                                                                  vk::ImageUsageFlagBits::eSampled,
                                                                  vk::MemoryPropertyFlagBits::eDeviceLocal);
+
+        vk::raii::CommandBuffer commandBuffer = beginSingleTimeCommands();
+
+        transitionImageLayout(
+            commandBuffer,
+            textureImage,
+            vk::ImageLayout::eUndefined,
+            vk::ImageLayout::eTransferDstOptimal
+        );
+
+        copyBufferToImage(
+            commandBuffer,
+            stagingBuffer,
+            textureImage,
+            static_cast<uint32_t>(texWidth),
+            static_cast<uint32_t>(texHeight)
+        );
+
+        transitionImageLayout(
+            commandBuffer,
+            textureImage,
+            vk::ImageLayout::eTransferDstOptimal,
+            vk::ImageLayout::eShaderReadOnlyOptimal
+        );
+
+        endSingleTimeCommands(std::move(commandBuffer));
     }
 
     void createDescriptorSets() {
