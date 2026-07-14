@@ -22,9 +22,18 @@
 #include <fstream>
 #include <string>
 #include <array>
+#include <unordered_map>
+
+#define TINYOBJLOADER_IMPLEMENTATION
+#include <tiny_obj_loader.h>
+
+#define GLM_ENABLE_EXPERIMENTAL
+#include <glm/gtx/hash.hpp>
 
 constexpr uint32_t WIDTH = 800;
 constexpr uint32_t HEIGHT = 600;
+const std::string MODEL_PATH = "models/viking_room.obj";
+const std::string TEXTURE_PATH  = "textures/viking_room.png";
 
 const std::vector<char const*> validationLayers = {"VK_LAYER_KHRONOS_validation"};
 
@@ -54,24 +63,22 @@ struct Vertex
             vk::VertexInputAttributeDescription(2, 0, vk::Format::eR32G32Sfloat, offsetof(Vertex, texCoord))
         };
     }
+
+    bool operator==(const Vertex& other) const
+    {
+        return pos == other.pos && color == other.color && texCoord == other.texCoord;
+    }
 };
 
-const std::vector<Vertex> vertices = {
-    {{-0.5f, -0.5f, 0.0f}, {1.0f, 0.0f, 0.0f}, {0.0f, 0.0f}},
-    {{0.5f, -0.5f, 0.0f}, {0.0f, 1.0f, 0.0f}, {1.0f, 0.0f}},
-    {{0.5f, 0.5f, 0.0f}, {0.0f, 0.0f, 1.0f}, {1.0f, 1.0f}},
-    {{-0.5f, 0.5f, 0.0f}, {1.0f, 1.0f, 1.0f}, {0.0f, 1.0f}},
-
-    {{-0.5f, -0.5f, -0.5f}, {1.0f, 0.0f, 0.0f}, {0.0f, 0.0f}},
-    {{0.5f, -0.5f, -0.5f}, {0.0f, 1.0f, 0.0f}, {1.0f, 0.0f}},
-    {{0.5f, 0.5f, -0.5f}, {0.0f, 0.0f, 1.0f}, {1.0f, 1.0f}},
-    {{-0.5f, 0.5f, -0.5f}, {1.0f, 1.0f, 1.0f}, {0.0f, 1.0f}}
-};
-
-const std::vector<uint16_t> indices = {
-    0, 1, 2, 2, 3, 0,
-    4, 5, 6, 6, 7, 4
-};
+namespace std {
+    template<> struct hash<Vertex> {
+        size_t operator()(Vertex const& vertex) const
+        {
+            return ((hash<glm::vec3>()(vertex.pos) ^ (hash<glm::vec3>()(vertex.color) << 1)) >> 1) ^
+                (hash<glm::vec2>()(vertex.texCoord) << 1);
+        }
+    };
+}
 
 class HelloTriangleApplication {
 public:
@@ -119,6 +126,9 @@ private:
     uint32_t frameIndex = 0;
 
     bool framebufferResized = false;
+
+    std::vector<Vertex> vertices;
+    std::vector<uint32_t> indices;
 
     vk::raii::Buffer vertexBuffer = nullptr;
     vk::raii::DeviceMemory vertexBufferMemory = nullptr;
@@ -239,6 +249,72 @@ private:
     }
 
     //region setup
+
+    void loadModel() {
+        tinyobj::attrib_t attrib;
+        std::vector<tinyobj::shape_t> shapes;
+        std::vector<tinyobj::material_t> materials;
+        std::string warning;
+        std::string error;
+
+        if (!tinyobj::LoadObj(
+                &attrib,
+                &shapes,
+                &materials,
+                &warning,
+                &error,
+                MODEL_PATH.c_str()
+            )) {
+            throw std::runtime_error(warning + error);
+            }
+
+        vertices.clear();
+        indices.clear();
+
+        std::unordered_map<Vertex, uint32_t> uniqueVertices;
+
+        for (const auto& shape : shapes) {
+            for (const auto& index : shape.mesh.indices) {
+                Vertex vertex{};
+
+                if (index.vertex_index < 0) {
+                    continue;
+                }
+
+                vertex.pos = {
+                    attrib.vertices[3 * index.vertex_index + 0],
+                    attrib.vertices[3 * index.vertex_index + 1],
+                    attrib.vertices[3 * index.vertex_index + 2]
+                };
+
+                if (index.texcoord_index >= 0) {
+                    vertex.texCoord = {
+                        attrib.texcoords[2 * index.texcoord_index + 0],
+                        1.0f - attrib.texcoords[2 * index.texcoord_index + 1]
+                    };
+                } else {
+                    vertex.texCoord = {0.0f, 0.0f};
+                }
+
+                vertex.color = {1.0f, 1.0f, 1.0f};
+
+                const auto [iterator, inserted] = uniqueVertices.emplace(
+                    vertex,
+                    static_cast<uint32_t>(vertices.size())
+                );
+
+                if (inserted) {
+                    vertices.push_back(vertex);
+                }
+
+                // Use the index stored in the hash map.
+                indices.push_back(iterator->second);
+            }
+        }
+
+        std::cout << "Unique vertices: " << vertices.size() << '\n';
+        std::cout << "Indices: " << indices.size() << '\n';
+    }
 
     void copyBufferToImage(vk::raii::CommandBuffer &commandBuffer, const vk::raii::Buffer &buffer, vk::raii::Image &image, uint32_t width, uint32_t height)
     {
@@ -382,7 +458,7 @@ private:
 
     void createTextureImage() {
         int texWidth, texHeight, texChannels;
-        stbi_uc *pixels = stbi_load("textures/texture.jpg", &texWidth, &texHeight, &texChannels, STBI_rgb_alpha);
+        stbi_uc *pixels = stbi_load(TEXTURE_PATH.c_str(), &texWidth, &texHeight, &texChannels, STBI_rgb_alpha);
         vk::DeviceSize imageSize = texWidth * texHeight * 4;
 
         if (!pixels) throw std::runtime_error("failed to load texture image!");
@@ -581,8 +657,7 @@ private:
         queue.waitIdle();
     }
 
-    void copyBuffer(const vk::raii::Buffer &srcBuffer, const vk::raii::Buffer &dstBuffer, const vk::DeviceSize size)
-    {
+    void copyBuffer(const vk::raii::Buffer &srcBuffer, const vk::raii::Buffer &dstBuffer, const vk::DeviceSize size) {
         vk::raii::CommandBuffer commandCopyBuffer = beginSingleTimeCommands();
         commandCopyBuffer.copyBuffer(*srcBuffer, *dstBuffer, vk::BufferCopy{.size = size});
         endSingleTimeCommands(std::move(commandCopyBuffer));
@@ -593,28 +668,27 @@ private:
 
         auto [stagingBuffer, stagingBufferMemory] =
                 createBuffer(bufferSize, vk::BufferUsageFlagBits::eTransferSrc,
-                                   vk::MemoryPropertyFlagBits::eHostVisible |
-                                            vk::MemoryPropertyFlagBits::eHostCoherent);
+                             vk::MemoryPropertyFlagBits::eHostVisible |
+                             vk::MemoryPropertyFlagBits::eHostCoherent);
 
-        void* dataStaging = stagingBufferMemory.mapMemory(0, bufferSize);
+        void *dataStaging = stagingBufferMemory.mapMemory(0, bufferSize);
         memcpy(dataStaging, vertices.data(), bufferSize);
         stagingBufferMemory.unmapMemory();
 
         std::tie(vertexBuffer, vertexBufferMemory) = createBuffer(bufferSize,
-                                                           vk::BufferUsageFlagBits::eVertexBuffer |
-                                                           vk::BufferUsageFlagBits::eTransferDst, vk::MemoryPropertyFlagBits::eDeviceLocal);
+                                                                  vk::BufferUsageFlagBits::eVertexBuffer |
+                                                                  vk::BufferUsageFlagBits::eTransferDst,
+                                                                  vk::MemoryPropertyFlagBits::eDeviceLocal);
         copyBuffer(stagingBuffer, vertexBuffer, bufferSize);
     }
 
-    void createSyncObjects()
-    {
+    void createSyncObjects() {
         assert(presentCompleteSemaphores.empty() && renderFinishedSemaphores.empty() && inFlightFences.empty());
 
         for (size_t i = 0; i < swapChainImages.size(); i++)
             renderFinishedSemaphores.emplace_back(device, vk::SemaphoreCreateInfo());
 
-        for (size_t i = 0; i < MAX_FRAMES_IN_FLIGHT; i++)
-        {
+        for (size_t i = 0; i < MAX_FRAMES_IN_FLIGHT; i++) {
             presentCompleteSemaphores.emplace_back(device, vk::SemaphoreCreateInfo());
             inFlightFences.emplace_back(device, vk::FenceCreateInfo{.flags = vk::FenceCreateFlagBits::eSignaled});
         }
@@ -658,146 +732,146 @@ private:
 
         commandBuffer.pipelineBarrier2(dependencyInfo);
     }
-   void recordCommandBuffer(const uint32_t imageIndex) const
-{
-    const vk::raii::CommandBuffer& commandBuffer =
-        commandBuffers[frameIndex];
 
-    commandBuffer.begin(vk::CommandBufferBeginInfo{});
+    void recordCommandBuffer(const uint32_t imageIndex) const {
+        const vk::raii::CommandBuffer &commandBuffer =
+                commandBuffers[frameIndex];
 
-    // Prepare the swapchain color image.
-    transition_image_layout(
-        commandBuffer,
-        swapChainImages[imageIndex],
-        vk::ImageLayout::eUndefined,
-        vk::ImageLayout::eColorAttachmentOptimal,
-        {},
-        vk::AccessFlagBits2::eColorAttachmentWrite,
-        vk::PipelineStageFlagBits2::eTopOfPipe,
-        vk::PipelineStageFlagBits2::eColorAttachmentOutput,
-        vk::ImageAspectFlagBits::eColor
-    );
+        commandBuffer.begin(vk::CommandBufferBeginInfo{});
 
-    // Prepare the depth image.
-    transition_image_layout(
-        commandBuffer,
-        *depthImage,
-        vk::ImageLayout::eUndefined,
-        vk::ImageLayout::eDepthAttachmentOptimal,
-        {},
-        vk::AccessFlagBits2::eDepthStencilAttachmentRead |
-                     vk::AccessFlagBits2::eDepthStencilAttachmentWrite,
-        vk::PipelineStageFlagBits2::eTopOfPipe,
-        vk::PipelineStageFlagBits2::eEarlyFragmentTests |
+        // Prepare the swapchain color image.
+        transition_image_layout(
+            commandBuffer,
+            swapChainImages[imageIndex],
+            vk::ImageLayout::eUndefined,
+            vk::ImageLayout::eColorAttachmentOptimal,
+            {},
+            vk::AccessFlagBits2::eColorAttachmentWrite,
+            vk::PipelineStageFlagBits2::eTopOfPipe,
+            vk::PipelineStageFlagBits2::eColorAttachmentOutput,
+            vk::ImageAspectFlagBits::eColor
+        );
+
+        // Prepare the depth image.
+        transition_image_layout(
+            commandBuffer,
+            *depthImage,
+            vk::ImageLayout::eUndefined,
+            vk::ImageLayout::eDepthAttachmentOptimal,
+            {},
+            vk::AccessFlagBits2::eDepthStencilAttachmentRead |
+            vk::AccessFlagBits2::eDepthStencilAttachmentWrite,
+            vk::PipelineStageFlagBits2::eTopOfPipe,
+            vk::PipelineStageFlagBits2::eEarlyFragmentTests |
             vk::PipelineStageFlagBits2::eLateFragmentTests,
-        vk::ImageAspectFlagBits::eDepth
-    );
+            vk::ImageAspectFlagBits::eDepth
+        );
 
-    const vk::ClearValue clearColor =
-        vk::ClearColorValue(0.0f, 0.0f, 0.0f, 1.0f);
+        const vk::ClearValue clearColor =
+                vk::ClearColorValue(0.0f, 0.0f, 0.0f, 1.0f);
 
-    const vk::ClearValue clearDepth =
-        vk::ClearDepthStencilValue(1.0f, 0);
+        const vk::ClearValue clearDepth =
+                vk::ClearDepthStencilValue(1.0f, 0);
 
-    const vk::RenderingAttachmentInfo colorAttachmentInfo{
-        .imageView = *swapChainImageViews[imageIndex],
-        .imageLayout = vk::ImageLayout::eColorAttachmentOptimal,
-        .loadOp = vk::AttachmentLoadOp::eClear,
-        .storeOp = vk::AttachmentStoreOp::eStore,
-        .clearValue = clearColor
-    };
+        const vk::RenderingAttachmentInfo colorAttachmentInfo{
+            .imageView = *swapChainImageViews[imageIndex],
+            .imageLayout = vk::ImageLayout::eColorAttachmentOptimal,
+            .loadOp = vk::AttachmentLoadOp::eClear,
+            .storeOp = vk::AttachmentStoreOp::eStore,
+            .clearValue = clearColor
+        };
 
-    const vk::RenderingAttachmentInfo depthAttachmentInfo{
-        .imageView = *depthImageView,
-        .imageLayout = vk::ImageLayout::eDepthAttachmentOptimal,
-        .loadOp = vk::AttachmentLoadOp::eClear,
-        .storeOp = vk::AttachmentStoreOp::eDontCare,
-        .clearValue = clearDepth
-    };
+        const vk::RenderingAttachmentInfo depthAttachmentInfo{
+            .imageView = *depthImageView,
+            .imageLayout = vk::ImageLayout::eDepthAttachmentOptimal,
+            .loadOp = vk::AttachmentLoadOp::eClear,
+            .storeOp = vk::AttachmentStoreOp::eDontCare,
+            .clearValue = clearDepth
+        };
 
-    const vk::RenderingInfo renderingInfo{
-        .renderArea = {
-            .offset = {0, 0},
-            .extent = swapChainExtent
-        },
-        .layerCount = 1,
-        .colorAttachmentCount = 1,
-        .pColorAttachments = &colorAttachmentInfo,
-        .pDepthAttachment = &depthAttachmentInfo
-    };
+        const vk::RenderingInfo renderingInfo{
+            .renderArea = {
+                .offset = {0, 0},
+                .extent = swapChainExtent
+            },
+            .layerCount = 1,
+            .colorAttachmentCount = 1,
+            .pColorAttachments = &colorAttachmentInfo,
+            .pDepthAttachment = &depthAttachmentInfo
+        };
 
-    commandBuffer.beginRendering(renderingInfo);
+        commandBuffer.beginRendering(renderingInfo);
 
-    commandBuffer.bindPipeline(
-        vk::PipelineBindPoint::eGraphics,
-        *graphicsPipeline
-    );
+        commandBuffer.bindPipeline(
+            vk::PipelineBindPoint::eGraphics,
+            *graphicsPipeline
+        );
 
-    commandBuffer.setViewport(
-        0,
-        vk::Viewport{
-            0.0f,
-            0.0f,
-            static_cast<float>(swapChainExtent.width),
-            static_cast<float>(swapChainExtent.height),
-            0.0f,
-            1.0f
-        }
-    );
+        commandBuffer.setViewport(
+            0,
+            vk::Viewport{
+                0.0f,
+                0.0f,
+                static_cast<float>(swapChainExtent.width),
+                static_cast<float>(swapChainExtent.height),
+                0.0f,
+                1.0f
+            }
+        );
 
-    commandBuffer.setScissor(
-        0,
-        vk::Rect2D{
-            vk::Offset2D{0, 0},
-            swapChainExtent
-        }
-    );
+        commandBuffer.setScissor(
+            0,
+            vk::Rect2D{
+                vk::Offset2D{0, 0},
+                swapChainExtent
+            }
+        );
 
-    commandBuffer.bindVertexBuffers(
-        0,
-        *vertexBuffer,
-        {0}
-    );
+        commandBuffer.bindVertexBuffers(
+            0,
+            *vertexBuffer,
+            {0}
+        );
 
-    commandBuffer.bindIndexBuffer(
-        *indexBuffer,
-        0,
-        vk::IndexType::eUint16
-    );
+        commandBuffer.bindIndexBuffer(
+            *indexBuffer,
+            0,
+            vk::IndexType::eUint32
+        );
 
-    commandBuffer.bindDescriptorSets(
-        vk::PipelineBindPoint::eGraphics,
-        *pipelineLayout,
-        0,
-        *descriptorSets[frameIndex],
-        nullptr
-    );
+        commandBuffer.bindDescriptorSets(
+            vk::PipelineBindPoint::eGraphics,
+            *pipelineLayout,
+            0,
+            *descriptorSets[frameIndex],
+            nullptr
+        );
 
-    commandBuffer.drawIndexed(
-        static_cast<uint32_t>(indices.size()),
-        1,
-        0,
-        0,
-        0
-    );
+        commandBuffer.drawIndexed(
+            static_cast<uint32_t>(indices.size()),
+            1,
+            0,
+            0,
+            0
+        );
 
-    commandBuffer.endRendering();
+        commandBuffer.endRendering();
 
-    // Prepare the swapchain image for presentation.
-    transition_image_layout(
-        commandBuffer,
-        swapChainImages[imageIndex],
-        vk::ImageLayout::eColorAttachmentOptimal,
-        vk::ImageLayout::ePresentSrcKHR,
-        vk::AccessFlagBits2::eColorAttachmentWrite,
-        {},
-        vk::PipelineStageFlagBits2::eColorAttachmentOutput,
-        vk::PipelineStageFlagBits2::eBottomOfPipe,
-        vk::ImageAspectFlagBits::eColor
-    );
+        // Prepare the swapchain image for presentation.
+        transition_image_layout(
+            commandBuffer,
+            swapChainImages[imageIndex],
+            vk::ImageLayout::eColorAttachmentOptimal,
+            vk::ImageLayout::ePresentSrcKHR,
+            vk::AccessFlagBits2::eColorAttachmentWrite,
+            {},
+            vk::PipelineStageFlagBits2::eColorAttachmentOutput,
+            vk::PipelineStageFlagBits2::eBottomOfPipe,
+            vk::ImageAspectFlagBits::eColor
+        );
 
-    commandBuffer.end();
-}
+        commandBuffer.end();
+    }
 
     void createCommandBuffers() {
         vk::CommandBufferAllocateInfo allocInfo{
@@ -1310,6 +1384,7 @@ private:
         createTextureImage();
         createTextureImageView();
         createTextureSampler();
+        loadModel();
         createVertexBuffer();
         createIndexBuffer();
         createUniformBuffers();
